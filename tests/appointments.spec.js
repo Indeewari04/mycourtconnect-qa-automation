@@ -220,3 +220,140 @@ test('Lawyer can reject a pending appointment', async ({
     }
   );
 });
+test('Booking blocks empty date and time', async ({ page }) => {
+  await login(page, 'client');
+  const form = await openBookingForm(page);
+
+  const date = form.locator('input[name="book_date"]');
+  const time = form.locator('input[name="book_time"]');
+
+  await date.fill('');
+  await time.fill('');
+
+  // Track whether clicking Confirm sends a booking request.
+  const bookingRequests = [];
+
+  const trackBooking = request => {
+    if (request.method() !== 'POST') return;
+
+    const data = new URLSearchParams(request.postData() || '');
+
+    if (data.has('book_date') && data.has('book_time')) {
+      bookingRequests.push(request.url());
+    }
+  };
+
+  page.on('request', trackBooking);
+
+  try {
+    await form.getByRole('button', {
+      name: /Confirm Booking/i,
+    }).click();
+
+    expect(
+      await date.evaluate(el => el.validity.valueMissing)
+    ).toBe(true);
+
+    expect(
+      await time.evaluate(el => el.validity.valueMissing)
+    ).toBe(true);
+
+    await expect(form).toBeVisible();
+    expect(bookingRequests).toHaveLength(0);
+  } finally {
+    page.off('request', trackBooking);
+  }
+});
+test('Booking blocks an empty time', async ({ page }) => {
+  await login(page, 'client');
+  const form = await openBookingForm(page);
+
+  const slot = createSlot();
+  const date = form.locator('input[name="book_date"]');
+  const time = form.locator('input[name="book_time"]');
+
+  await date.fill(slot.date);
+  await time.fill('');
+
+  await form.getByRole('button', {
+    name: /Confirm Booking/i,
+  }).click();
+
+  expect(
+    await time.evaluate(el => el.validity.valueMissing)
+  ).toBe(true);
+
+  await expect(date).toHaveValue(slot.date);
+  await expect(form).toBeVisible();
+});
+test('Booking blocks an empty date', async ({ page }) => {
+  await login(page, 'client');
+  const form = await openBookingForm(page);
+
+  const date = form.locator('input[name="book_date"]');
+  const time = form.locator('input[name="book_time"]');
+
+  await date.fill('');
+  await time.fill('14:30');
+
+  await form.getByRole('button', {
+    name: /Confirm Booking/i,
+  }).click();
+
+  expect(
+    await date.evaluate(el => el.validity.valueMissing)
+  ).toBe(true);
+
+  await expect(time).toHaveValue('14:30');
+  await expect(form).toBeVisible();
+});
+test('Booking blocks a past date', async ({ page }) => {
+  await login(page, 'client');
+  const form = await openBookingForm(page);
+
+  const date = form.locator('input[name="book_date"]');
+  const time = form.locator('input[name="book_time"]');
+
+  // Choose the day before the minimum allowed date.
+  const minDate = await date.getAttribute('min');
+  expect(minDate, 'Date field should have a minimum date').toBeTruthy();
+
+  const past = new Date(`${minDate}T12:00:00Z`);
+  past.setUTCDate(past.getUTCDate() - 1);
+
+  const pastDate = past.toISOString().slice(0, 10);
+
+  await date.fill(pastDate);
+  await time.fill('14:30');
+
+  await form.getByRole('button', {
+    name: /Confirm Booking/i,
+  }).click();
+
+  expect(
+    await date.evaluate(el => el.validity.rangeUnderflow)
+  ).toBe(true);
+
+  await expect(date).toHaveValue(pastDate);
+  await expect(form).toBeVisible();
+});
+test('Booking blocks an exact duplicate appointment', async ({ page }) => {
+  // Create the first booking.
+  const slot = await bookAppointment(page);
+
+  // Try booking the same lawyer, date and time again.
+  const form = await openBookingForm(page);
+
+  await form.locator('input[name="book_date"]').fill(slot.date);
+  await form.locator('input[name="book_time"]').fill(slot.time);
+
+  await form.getByRole('button', {
+    name: /Confirm Booking/i,
+  }).click();
+
+  await expect(
+    page.getByText('You already have this exact appointment.', {
+      exact: true,
+    })
+  ).toBeVisible();
+});
